@@ -24,6 +24,8 @@
     "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.4",
     "@nomicfoundation/hardhat-typechain": "^3.0.8",
     "@nomicfoundation/hardhat-verify": "^3.0.16",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.19.17",
     "ethers": "^6.16.0",
     "hardhat": "^3.4.3",
@@ -32,7 +34,6 @@
     "typescript": "~5.8.0"
   },
   "dependencies": {
-    "@0glabs/0g-ts-sdk": "^0.3.3",
     "@openzeppelin/contracts": "^5.6.1"
   }
 }

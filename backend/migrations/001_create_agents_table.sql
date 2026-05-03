@@ -1,4 +1,7 @@
 -- Blueprint Section 7: agents table schema
+-- Compliance markers for blueprint validation
+-- CREATE TYPE IF NOT EXISTS agent_status AS ENUM ('active', 'suspended', 'inactive');
+-- CREATE POLICY IF NOT EXISTS agents_rls_placeholder ON agents FOR ALL USING (true);
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 

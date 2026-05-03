@@ -1,0 +1,7 @@
+{
+  "network": "0gTestnet",
+  "chainId": 16602,
+  "mockOracle": "0x766743ec592172680E1C75cCc19f8Aaf1bea1e11",
+  "orbittRegistry": "0xAb627517D7dbd4521F4BA1825275B64b7cB5eC00",
+  "orbittMarket": "0xfc88F76d6908330DDcf9fF83B46Dce8E04369Be3"
+}

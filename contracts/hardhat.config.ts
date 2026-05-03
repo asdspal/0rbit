@@ -31,7 +31,7 @@ export default defineConfig({
     "0gTestnet": {
       type: "http",
       chainType: "l1",
-      chainId: 16601,
+      chainId: 16602,
       url: configVariable("OG_RPC_URL"),
       accounts: [configVariable("OG_PRIVATE_KEY")],
     },

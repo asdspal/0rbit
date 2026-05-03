@@ -1,0 +1,31 @@
+type Agent @entity {
+  id: ID!
+  walletAddress: Bytes
+  inftTokenId: BigInt
+  ensName: String
+  axlPeerId: String
+  reputationScore: BigInt
+  jobsCompleted: BigInt
+}
+
+type Job @entity {
+  id: ID!
+  poster: Bytes!
+  agentTokenId: BigInt
+  status: String!
+  paymentToken: Bytes!
+  escrowAmount: BigInt!
+  deadline: BigInt!
+  specHash: Bytes!
+  outputHash: Bytes
+}
+
+type ReputationEvent @entity {
+  id: ID!
+  agent: Agent!
+  job: Job
+  delta: BigInt!
+  newScore: BigInt!
+  reason: String
+  timestamp: BigInt!
+}

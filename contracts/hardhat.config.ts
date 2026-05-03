@@ -28,11 +28,19 @@ export default defineConfig({
       type: "edr-simulated",
       chainType: "op",
     },
+    "0gTestnet": {
+      type: "http",
+      chainType: "l1",
+      chainId: 16601,
+      url: configVariable("OG_RPC_URL"),
+      accounts: [configVariable("OG_PRIVATE_KEY")],
+    },
     sepolia: {
       type: "http",
       chainType: "l1",
+      chainId: 11155111,
       url: configVariable("SEPOLIA_RPC_URL"),
-      accounts: [configVariable("SEPOLIA_PRIVATE_KEY")],
+      accounts: [configVariable("OG_PRIVATE_KEY")],
     },
   },
 });

@@ -1,0 +1,9 @@
+# agents plugin scaffolds dependencies
+
+# HTTP client for AXL and general integrations (deferred imports in code)
+httpx>=0.27,<1.0
+
+# GAP: 0G storage Python SDK not specified in blueprint. The TypeScript SDK
+# "@0gfoundation/0g-storage-ts-sdk" has no pip equivalent. When a Python SDK or
+# REST bridge is chosen, add its dependency here and implement in storage.py.
+

@@ -2,10 +2,12 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.auth.jwt import create_access_token
 from app.auth.siwe import parse_siwe_message, verify_signature
+from app.database import get_supabase_client
+from app.deps import get_current_user
 from app.redis import _get_client
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
@@ -66,3 +68,29 @@ async def auth_verify(payload: dict, response: Response):
     )
 
     return {"jwt": token, "agent": None}
+
+
+@router.get("/me", summary="Get current user")
+async def auth_me(address: str = Depends(get_current_user)):
+    client = get_supabase_client()
+    response = (
+        client.table("agents")
+        .select("id", "ens_name")
+        .eq("wallet_address", address)
+        .limit(1)
+        .execute()
+    )
+    error = getattr(response, "error", None)
+    if error:
+        raise HTTPException(status_code=500, detail="Failed to load agent")
+
+    agent = None
+    data = getattr(response, "data", None)
+    if isinstance(data, list) and data:
+        agent = data[0]
+
+    return {
+        "address": address,
+        "agent_id": agent.get("id") if agent else None,
+        "ens_name": agent.get("ens_name") if agent else None,
+    }

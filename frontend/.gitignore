@@ -38,3 +38,4 @@ backend/.env*.local
 next-env.d.ts
 
 memory-bank/*
+progress.md

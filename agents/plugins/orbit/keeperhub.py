@@ -1,21 +1,29 @@
-"""KeeperHub MCP integration stub for 0rbit plugin.
+"""KeeperHub MCP client for the 0rbit agent plugin.
 
 Blueprint binding
-- Section 14 Phase 4 Item 1, Section 4 (Agent Framework layer)
+- Section 14 Phase 4 Item 5 (KeeperHub escrow automation)
+- Section 10.4 (Tools: create_workflow, trigger_execution, check_execution_status)
 
 Purpose
-- Define lightweight interfaces for interacting with KeeperHub via MCP (Model Context Protocol)
-  or equivalent RPC. This is framework-agnostic and avoids any import-time side effects.
+- Provide an async HTTP facade that the agent can call to invoke KeeperHub MCP tools.
+- Enforce blueprint constraints: team account authentication (API key) and autonomous
+  escrow release triggers.
 
-GAP notes
-- Concrete MCP transport, auth, and tool schemas are not specified in the blueprint.
-- Implementations should bind to a concrete MCP client and map these interfaces.
+GAP documentation
+- KeeperHub MCP transport + REST surface are not published. This implementation follows the
+  Section 10.4 tool naming and uses placeholder REST paths under ``/mcp``. Update
+  ``KEEPERHUB_BASE_URL`` or the per-method paths once KeeperHub shares their production schema.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+import httpx
 
 __all__ = ["KeeperHubClient", "KeeperHubError", "WebhookVerifier"]
 
@@ -26,31 +34,96 @@ class KeeperHubError(RuntimeError):
 
 @dataclass
 class KeeperHubClient:
-    """Thin facade for KeeperHub MCP operations.
+    """Async HTTP client exposing the Section 10.4 KeeperHub tool surface."""
 
-    This client exposes tool registration and invocation surfaces that a concrete MCP
-    implementation can bind to. No network actions occur at import time.
-    """
-
-    endpoint: str
     api_key: Optional[str] = None
+    base_url: str = os.getenv("KEEPERHUB_BASE_URL", "https://api.keeperhub.xyz")
+    timeout: float = 15.0
 
-    async def register_tool(self, name: str, schema: Dict[str, Any]) -> None:
-        """Register a tool with KeeperHub.
+    # GAP: Endpoint paths inferred from Section 10.4 tool names until KeeperHub publishes MCP schema
+    _WORKFLOWS_PATH: str = "/mcp/workflows"
+    _EXECUTIONS_PATH: str = "/mcp/executions"
 
-        A concrete implementation should perform an authenticated MCP call to publish the
-        tool and its JSON schema, handling idempotency.
+    def __post_init__(self) -> None:
+        if not self.api_key:
+            self.api_key = os.getenv("KEEPERHUB_API_KEY")
+        if not self.api_key:
+            raise KeeperHubError("KeeperHub API key missing (set KEEPERHUB_API_KEY)")
+
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+    async def _request(
+        self, method: str, path: str, *, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout) as client:
+                response = await client.request(method, path, json=payload, headers=self._headers())
+                response.raise_for_status()
+        except httpx.HTTPError as exc:  # pragma: no cover - network failures mocked in tests
+            raise KeeperHubError(f"KeeperHub request failed for {method} {path}") from exc
+
+        data = response.json()
+        if not isinstance(data, dict):
+            raise KeeperHubError("KeeperHub response must be a JSON object")
+        return data
+
+    @staticmethod
+    def _require_field(data: Dict[str, Any], candidates: tuple[str, ...], label: str) -> str:
+        for key in candidates:
+            value = data.get(key)
+            if value:
+                return str(value)
+        raise KeeperHubError(f"KeeperHub response missing {label}")
+
+    async def create_workflow(self, name: str, trigger: str, actions: list[Any]) -> str:
+        """Create a KeeperHub workflow (Section 10.4 create_workflow tool).
+
+        Returns the workflow identifier provided by KeeperHub.
         """
 
-        raise NotImplementedError("KeeperHub tool registration not implemented — awaiting MCP details")
+        if not name:
+            raise KeeperHubError("workflow name is required")
+        if not trigger:
+            raise KeeperHubError("workflow trigger is required")
+        if not isinstance(actions, list) or not actions:
+            raise KeeperHubError("workflow actions must be a non-empty list")
 
-    async def call_tool(self, name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Invoke a registered tool by name with parameters.
+        payload = {"name": name, "trigger": trigger, "actions": actions}
+        data = await self._request("POST", self._WORKFLOWS_PATH, payload=payload)
+        return self._require_field(data, ("workflow_id", "id"), "workflow_id")
 
-        Returns the tool's JSON result.
-        """
+    async def trigger_execution(self, workflow_id: str, params: Dict[str, Any]) -> str:
+        """Trigger a KeeperHub workflow execution (Section 10.4 trigger_execution tool)."""
 
-        raise NotImplementedError("KeeperHub tool invocation not implemented — awaiting MCP details")
+        if not workflow_id:
+            raise KeeperHubError("workflow_id is required")
+        if params is None:
+            raise KeeperHubError("params is required")
+
+        path = f"{self._WORKFLOWS_PATH}/{workflow_id}/executions"
+        payload = {"params": params}
+        data = await self._request("POST", path, payload=payload)
+        return self._require_field(data, ("execution_id", "id"), "execution_id")
+
+    async def check_execution_status(self, execution_id: str) -> Dict[str, Any]:
+        """Fetch KeeperHub execution status (Section 10.4 check_execution_status tool)."""
+
+        if not execution_id:
+            raise KeeperHubError("execution_id is required")
+
+        path = f"{self._EXECUTIONS_PATH}/{execution_id}"
+        data = await self._request("GET", path)
+        return {
+            "status": data.get("status"),
+            "result": data.get("result"),
+            # preserve entire payload for callers needing KeeperHub-specific fields
+            "raw": data,
+        }
 
 
 @dataclass
@@ -63,11 +136,15 @@ class WebhookVerifier:
     secret: str
 
     def verify(self, payload: bytes, signature: str) -> bool:
-        """Return True if the signature matches the payload using the shared secret.
+        """Return True if the signature matches the payload using the shared secret."""
 
-        A concrete implementation should compute the HMAC digest (e.g., sha256) and compare
-        in constant time.
-        """
+        if not isinstance(payload, (bytes, bytearray)):
+            raise KeeperHubError("payload must be bytes for webhook verification")
+        if not self.secret:
+            raise KeeperHubError("KeeperHub webhook secret is required")
+        if not signature:
+            return False
 
-        raise NotImplementedError("KeeperHub webhook verifier not implemented — provide HMAC impl")
-
+        computed = hmac.new(self.secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
+        provided = signature.split("=", 1)[-1].lower()
+        return hmac.compare_digest(computed, provided)

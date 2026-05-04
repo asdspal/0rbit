@@ -54,4 +54,37 @@ class AxlClient:
         """
 
         raise NotImplementedError("AXL client not yet implemented — awaiting concrete API details")
+import base64
+import httpx
 
+class AXLClient:
+    def __init__(self, base_url: str = "http://localhost:9002"):
+        self.client = httpx.Client(base_url=base_url)
+
+    def send(self, dst_peer_id: str, data: bytes | str) -> dict:
+        if isinstance(data, bytes):
+            data_encoded = base64.b64encode(data).decode('ascii')
+        else:
+            data_encoded = data
+        response = self.client.post("/send", json={"dst_peer_id": dst_peer_id, "data": data_encoded})
+        response.raise_for_status()
+        return response.json()
+
+    def recv(self) -> list[dict]:
+        response = self.client.get("/recv")
+        response.raise_for_status()
+        return response.json()
+
+    def topology(self) -> dict:
+        response = self.client.get("/topology")
+        response.raise_for_status()
+        return response.json()
+
+    def close(self):
+        self.client.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()

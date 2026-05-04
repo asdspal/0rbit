@@ -1,54 +1,134 @@
-"""0G Storage integration stub for 0rbit plugin.
+"""0G Storage integration for the 0rbit plugin.
 
-Blueprint binding
-- Section 14 Phase 4 Item 1, Section 4 (Agent Framework layer)
-
-Purpose
-- Define a minimal, framework-agnostic interface for uploading artifacts to 0G Storage.
-- Python SDK availability is a GAP; this module documents the gap and provides signatures that an
-  adapter can implement once a Python client is finalized.
-
-GAP notes
-- The referenced package "@0gfoundation/0g-storage-ts-sdk" is TypeScript; a Python equivalent is
-  not specified. Implementors should select a Python client or bridge (e.g., REST gateway) and
-  wire it here.
+Implements the blueprint requirement to shell out to the official TypeScript SDK
+via `agents/scripts/0g_upload.js`, returning the Merkle root hash produced by the
+SDK. This keeps hashing semantics inside the supported SDK while allowing the
+Python agent runtime to remain lightweight.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+import os
+import subprocess
+import tempfile
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Mapping, Optional
 
-__all__ = ["StorageClient", "StorageError"]
+__all__ = ["StorageClient", "StorageError", "upload_data"]
+
+
+DEFAULT_ENDPOINT = os.getenv("OG_STORAGE_URL", "https://storage-testnet.0g.ai")
+DEFAULT_API_KEY = os.getenv("OG_STORAGE_API_KEY")
+DEFAULT_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "0g_upload.js"
 
 
 class StorageError(RuntimeError):
-    """0G storage client error placeholder."""
+    """Raised when uploading to 0G storage fails."""
 
 
 @dataclass
 class StorageClient:
-    """Lightweight 0G storage facade.
+    """Lightweight 0G storage facade that shells out to a Node.js helper."""
 
-    Implementations may talk to a REST bridge or a native Python SDK when available.
-    """
+    endpoint: str = DEFAULT_ENDPOINT
+    api_key: Optional[str] = DEFAULT_API_KEY
+    node_binary: str = "node"
+    script_path: Path = field(default_factory=lambda: DEFAULT_SCRIPT_PATH)
+    env: Optional[Mapping[str, str]] = None
+    timeout: float = 300.0
 
-    endpoint: str
-    api_key: Optional[str] = None
+    def upload_bytes(
+        self,
+        data: bytes,
+        *,
+        content_type: str = "application/octet-stream",
+        object_name: Optional[str] = None,
+    ) -> str:
+        """Upload raw bytes to 0G storage and return the Merkle root hash."""
 
-    async def upload_bytes(self, data: bytes, *, content_type: str = "application/octet-stream") -> str:
-        """Upload raw bytes to 0G storage.
+        if not isinstance(data, (bytes, bytearray)):
+            raise StorageError("upload_bytes expects bytes-like data")
 
-        Returns a content-addressed URI or a storage handle.
-        """
+        tmp_file = tempfile.NamedTemporaryFile(delete=False)
+        try:
+            tmp_file.write(bytes(data))
+            tmp_file.flush()
+            tmp_file.close()
+            filename = object_name or f"upload-{uuid.uuid4().hex}"
+            return self._run_upload(tmp_file.name, filename)
+        finally:
+            try:
+                os.unlink(tmp_file.name)
+            except FileNotFoundError:
+                pass
 
-        raise NotImplementedError("0G storage upload not implemented — awaiting Python SDK or REST bridge")
+    def upload_file(self, path: str, *, content_type: Optional[str] = None) -> str:
+        """Upload a local file to 0G storage and return the Merkle root hash."""
 
-    async def upload_file(self, path: str, *, content_type: Optional[str] = None) -> str:
-        """Upload a local file to 0G storage.
+        if not os.path.isfile(path):
+            raise StorageError(f"File not found: {path}")
 
-        Implementations should stream the file and avoid loading into memory when large.
-        """
+        absolute = os.path.abspath(path)
+        filename = os.path.basename(absolute)
+        return self._run_upload(absolute, filename)
 
-        raise NotImplementedError("0G storage file upload not implemented — awaiting Python SDK or REST bridge")
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
+    def _run_upload(self, file_path: str, filename: Optional[str]) -> str:
+        script = Path(self.script_path)
+        if not script.exists():
+            raise StorageError(f"0G upload script not found at {script}")
+
+        cmd = [self.node_binary, str(script), file_path]
+        if filename:
+            cmd.extend(["--filename", filename])
+
+        env = self._build_env()
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=self.timeout,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise StorageError(f"Executable not found: {self.node_binary}") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise StorageError("0G upload timed out") from exc
+
+        if result.returncode != 0:
+            error = result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            raise StorageError(f"0G upload failed: {error}")
+
+        output = result.stdout.strip()
+        if not output:
+            raise StorageError("0G upload produced no output")
+
+        return output
+
+    def _build_env(self) -> Mapping[str, str]:
+        env: dict[str, str] = os.environ.copy()
+        env.setdefault("OG_STORAGE_URL", self.endpoint)
+        if self.api_key:
+            env["OG_STORAGE_API_KEY"] = self.api_key
+        if self.env:
+            env.update(self.env)
+        return env
+
+
+def upload_data(data: bytes, filename: Optional[str] = None, *, client: Optional[StorageClient] = None) -> str:
+    """Convenience helper for uploading raw job output bytes to 0G storage."""
+
+    storage_client = client or StorageClient()
+    return storage_client.upload_bytes(
+        data,
+        content_type="application/octet-stream",
+        object_name=filename,
+    )

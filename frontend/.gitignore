@@ -37,3 +37,4 @@ backend/.env*.local
 *.tsbuildinfo
 next-env.d.ts
 
+memory-bank/*
